@@ -5,7 +5,7 @@ from os.path import isfile, join
 
 
 microstep_size = 4
-max_disp = 7300
+max_disp = 6300
 
 pending_folder = "pending/"
 processed_folder = "processed/"
