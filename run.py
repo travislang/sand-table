@@ -34,7 +34,8 @@ main_button = 26
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(outer_switch, GPIO.IN)
 GPIO.setup(inner_switch, GPIO.IN)
-GPIO.setup(main_button, GPIO.IN)
+GPIO.setup(main_button, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
 # GPIO.setup(motor_relay, GPIO.OUT)
 # GPIO.setup(led_relay, GPIO.OUT)
 
@@ -45,23 +46,12 @@ outer_to_max = 250
 
 # Run through the LED strip routine
 def run_LedStrip():
-    strip.begin()
-
     while strip_thread.running:
         print('LED Color wipe')
-        strip_thread.colorWipe(strip, Color(255, 0, 0))  # Red wipe
-        strip_thread.colorWipe(strip, Color(0, 255, 0))  # Blue wipe
-        strip_thread.colorWipe(strip, Color(0, 0, 255))  # Green wipe
+        strip_thread.colorWipe(strip, Color(0, 255, 0), 10)  # Blue wipe
+        if not strip_thread.running: return
         print('LED Theater chase')
-        if not strip_thread.running: return
         strip_thread.theaterChase(strip, Color(127, 127, 127))  # White theater chase
-        strip_thread.theaterChase(strip, Color(127, 0, 0))  # Red theater chase
-        strip_thread.theaterChase(strip, Color(0, 0, 127))  # Blue theater chase
-        print('LED Rainbow animations')
-        if not strip_thread.running: return
-        strip_thread.rainbow(strip)
-        strip_thread.rainbowCycle(strip)
-        strip_thread.theaterChaseRainbow(strip)
 
 
 # Functions defined for each motor thread
@@ -136,14 +126,6 @@ def calibrate_slide():
 
 
 def erase_out_to_in():
-    # if not interface.displaying_options:
-    #     lcd_display.lcd_clear()
-    #     lcd_display.lcd_display_string("Erasing Drawing!", 2, 2)
-
-    # interface.currently_displayed.clear()
-    # interface.currently_displayed.extend((("Erasing Drawing!", 2, 2), (None)))
-
-    interface.collision_detected = True
     M_Rot.running = True
     M_Lin.running = True
 
@@ -162,8 +144,6 @@ def erase_out_to_in():
 
     MRot.join()
     MLin.join()
-
-    interface.collision_detected = False
 
 
 def erase_in_to_out():
@@ -184,185 +164,82 @@ def erase_in_to_out():
     MLin.join()
 
 
-# def wait_for_erase():
-    # if not interface.displaying_options:
-    #     lcd_display.lcd_clear()
-    #     lcd_display.lcd_display_string("Drawing will be", 2, 2)
-    #     lcd_display.lcd_display_string("erased in... ", 3, 2)
+def ask_for_erase():
+    erase_timeout = 3 * 10
+    interface.ask_erase = True
+    yes_or_no = False
 
-    # interface.currently_displayed.clear()
-    # interface.currently_displayed.extend((("Drawing will be", 2, 2), ("erased in... ", 3, 2)))
+    while interface.ask_erase:
+        if erase_timeout < 1:
+            interface.ask_erase = False
+            continue
 
-    # for i in range(60):
-    #     lcd_display.lcd_display_string(str(60 - i), 3, 15)
-    #     sleep(1)
+        sleep(.1)
+        erase_timeout -= 1
 
+        if interface.paused:
+            yes_or_no = True
 
-# def ask_for_erase():
-#     interface.ask_erase = True
-#     yes_or_no = True
-#     changed = False
+    return yes_or_no
 
-    # if not interface.displaying_options:
-    #     lcd_display.lcd_clear()
-    #     lcd_display.lcd_display_string("Erase first?", 2, 4)
-    #     lcd_display.lcd_display_string("[Yes]/No", 3, 6)
-
-    # interface.currently_displayed.clear()
-    # interface.currently_displayed.extend((("Erase first?", 2, 4), ("[Yes]/No", 3, 6)))
-
-    # interface.main_pressed = False
-
-    # while interface.ask_erase:
-    #     sleep(.1)
-
-    #     if not interface.main_pressed and GPIO.input(main_button) == 1:
-    #         interface.main_pressed = True
-    #         interface.main_start_time = int(round(time.time() * 1000))
-
-    #     if interface.main_pressed:
-    #         if GPIO.input(main_button) == 0 and int(round(time.time() * 1000)) - interface.main_start_time > 1000:
-    #             interface.main_pressed = False
-    #             interface.ask_erase = False
-    #         elif GPIO.input(main_button) == 0:
-    #             interface.main_pressed = False
-    #             yes_or_no = not yes_or_no
-    #             changed = True
-
-        # if changed:
-        #     if yes_or_no:
-        #         lcd_display.lcd_clear()
-        #         lcd_display.lcd_display_string("Erase first?", 2, 4)
-        #         lcd_display.lcd_display_string("[Yes]/No", 3, 6)
-        #     else:
-        #         lcd_display.lcd_clear()
-        #         lcd_display.lcd_display_string("Erase first?", 2, 4)
-        #         lcd_display.lcd_display_string("Yes/[No]", 3, 6)
-
-            # changed = False
-
-    # interface.main_pressed = False
-    # interface.currently_displayed.clear()
-    # lcd_display.lcd_clear()
-
-    # interface.erase = True
-    # return yes_or_no
-
+set_color = Color(255, 255, 255)
+pause_color = Color(204, 0, 0)
+accept_color = Color(0, 255, 42)
 
 class InterfaceThread():
 
     def __init__(self):
-        self.running = True
-        self.collision_start_time = None
-        self.main_start_time = None
-        self.limit_pressed = False
-        self.main_pressed = False
-        self.collision_detected = False
+        self.timeout_length = 5000
+
+        # self.running = True
+        self.button_pressed = False
+        self.button_press_start_time = None
+
+        self.paused = False
+        self.pause_start_time = None
+
         self.stop_program = False
-        self.displaying_options = False
         self.next_drawing = False
         self.erase = False
-        self.ask_erase = False
 
-        self.options = {0: "Back", 1: "Shutdown", 2: "Stop/erase"}
-        self.selected_option = 0
+        # add press event for push button
+        GPIO.add_event_detect(main_button, GPIO.RISING,
+                              callback=self.main_button_pressed, bouncetime=200)
 
-        self.currently_displayed = []
+    def main_button_pressed(self):
+        if not self.button_pressed:
+            self.paused = False
+            self.button_pressed = True
+            self.button_press_start_time = int(round(time.time() * 1000))
+            #red color?
+            strip_thread.colorWipe(strip, pause_color, 5)
+            return
 
-    def check_all_switches(self):
+        if self.button_pressed:
+            if self.paused:
+                    self.next_drawing = True
+                    strip_thread.colorWipe(strip, accept_color, 5)
+            if not self.paused:
+                self.paused = True
+
+        
+
+    def check_loop(self):
         while self.running:
             sleep(.1)
 
-            if not self.ask_erase:
-                if not self.main_pressed and GPIO.input(main_button) == 1:
-                    self.main_pressed = True
-                    self.main_start_time = int(round(time.time() * 1000))
-
-                # if not self.displaying_options and self.main_pressed:
-                    # if GPIO.input(main_button) == 1 and int(round(time.time() * 1000)) - self.main_start_time > 3000:
-                    #     self.main_pressed = False
-                    #     self.stop_program = True
-                    #     self.running = False
-                    #     print("Shutdown!")
-                    #     # stop_motors()
-
-                    # if GPIO.input(main_button) == 0:
-                    #     self.main_pressed = False
-                    #     self.displaying_options = True
-                    #     self.display_options()
-
-                # if self.displaying_options and self.main_pressed:
-                #     if GPIO.input(main_button) == 0 and int(round(time.time() * 1000)) - self.main_start_time > 1000:
-                #         self.main_pressed = False
-                #         self.select_option()
-                #     elif GPIO.input(main_button) == 0:
-                #         self.main_pressed = False
-                #         self.selected_option = (self.selected_option + 1) % 3
-                #         self.display_options()
-
-
-    # def display_options(self):
-    #     lcd_display.lcd_clear()
-    #     for o in self.options:
-    #         if o == self.selected_option:
-    #             lcd_display.lcd_display_string("[ {} ]".format(self.options[o]), o + 1, round((16 - len(self.options[o])) / 2))
-    #         else:
-    #             lcd_display.lcd_display_string(self.options[o], o + 1, round((20 - len(self.options[o])) / 2))
-
-
-    # def select_option(self):
-    #     lcd_display.lcd_clear()
-    #     self.displaying_options = False
-
-    #     if self.selected_option == 0:
-    #         print("Back")
-    #         if (len(self.currently_displayed) > 0):
-    #             for n in self.currently_displayed:
-    #                 if n != None:
-    #                     lcd_display.lcd_display_string(n[0], n[1], n[2])
-    #     elif self.selected_option == 1:
-    #         self.stop_program = True
-    #         self.running = False
-    #         print("Shutdown!")
-    #         stop_motors()
-    #     else:
-    #         self.next_drawing = True
-    #         print("Erasing!")
-    #         lcd_display.lcd_clear()
-    #         stop_motors()
-
-
-    def check_collision(self):
-        if GPIO.input(inner_switch) == 0 or GPIO.input(outer_switch) == 0:
-            if not self.limit_pressed:
-                self.collision_start_time = int(round(time.time() * 1000))
-                self.limit_pressed = True
-
-            if self.limit_pressed and self.collision_start_time != None:
-                if int(round(time.time() * 1000)) - self.collision_start_time > 2000:
-                    print("\n---------- Collision Detected! ----------")
-                    # lcd_display.lcd_clear()
-                    # lcd_display.lcd_display_string("Collision Detected", 2, 1)
-
-                    stop_motors()
-                    self.collision_detected = True
-        else:
-            self.limit_pressed = False
+            if self.button_press_start_time and int(round(time.time() * 1000)) - self.button_press_start_time > self.timeout_length:
+                    self.button_pressed = False
+                    self.button_press_start_time = None
+                    strip_thread.colorWipe(strip, set_color, 5)
 
 
 # Stops the motors and LED strip, and joins the threads
 def stop_program(shutdown=False):
-    # if shutdown:
-    #     # lcd_display.lcd_clear()
-    #     # lcd_display.lcd_display_string("Shutting down...", 2, 2)
-    # else:
-        # lcd_display.lcd_clear()
-        # lcd_display.lcd_display_string("Program stopped!", 2, 2)
-
     stop_motors()
 
     strip_thread.running = False
-    strip_thread.colorWipe(strip, Color(0, 0, 0))
+    strip_thread.colorWipe(strip, Color(0, 0, 0), 10)
     LStrip.join()
 
     interface.running = False
@@ -371,15 +248,7 @@ def stop_program(shutdown=False):
     if shutdown:
         sleep(2)
 
-        # lcd_display.lcd_clear()
         GPIO.cleanup()
-
-        # lcd_display.lcd_clear()
-        # lcd_display.lcd_display_string("Wait at least 10 sec", 2)
-        # lcd_display.lcd_display_string("before restarting!", 3, 1)
-        # sleep(3)
-        # lcd_display.lcd_clear()
-        # lcd_display.backlight(0)
 
         call("sudo shutdown -h now", shell=True)
     else:
@@ -396,136 +265,65 @@ def stop_motors():
     print("\n---------- Motors Stopped! ----------")
 
 
-# Switches thread object init
+# button thread object init
 interface = InterfaceThread()
 
-# Create switches thread
-interface_thread = threading.Thread(target=interface.check_all_switches)
+# Create button thread
+interface_thread = threading.Thread(target=interface.check_loop)
 
 # Create LStrip thread
 LStrip = threading.Thread(target=run_LedStrip)
-# lcd_display = lcd()
 
 def main():
     global max_disp
 
     try:
-        # lcd_display.backlight(1)
+        max_disp = calibrate_slide()
 
-        GPIO.output(motor_relay, GPIO.LOW)
-        GPIO.output(led_relay, GPIO.LOW)
+        # GPIO.output(motor_relay, GPIO.LOW)
+        # GPIO.output(led_relay, GPIO.LOW)
 
         LStrip.start()
 
-        # if not interface.displaying_options:
-        #     # lcd_display.lcd_clear()
-        #     # lcd_display.lcd_display_string("....", 2, 8)
-
-        # interface.currently_displayed.clear()
-        # interface.currently_displayed.extend((("....", 2, 8)))
-
         # process_new_files(Dir="/home/pi/code/sand_table/")
-
         # files = get_files(Dir="/home/pi/code/sand_table/")
         with open("/home/pi/code/sand_table/filenames.txt", "r") as f:
             content = f.readlines()
         files = [line.rstrip('\n') for line in content]
-        # shuffle(files)
+        shuffle(files)
 
         print("---files---")
         print(files)
 
         interface_thread.start()
 
-        # if not interface.displaying_options:
-        #     lcd_display.lcd_clear()
-        #     lcd_display.lcd_display_string("Calibrating slide!", 2, 1)
-
-        # interface.currently_displayed.clear()
-        # interface.currently_displayed.extend((("Calibrating slide!", 2, 1), (None)))
-
-        max_disp = calibrate_slide()
-
-        # if not interface.displaying_options:
-        #     lcd_display.lcd_clear()
-       
-
         if len(files) == 0:
             print("---Files not found!---")
-            # lcd_display.lcd_display_string("Files not found!", 2, 2)
-            # interface.currently_displayed.clear()
-            # interface.currently_displayed.extend((("Files not found!", 2, 2), (None)))
 
-        first_file = True
+        start_first_file = False
         # first_file = not ask_for_erase()
 
         while not interface.stop_program:
-
             for f in files:
-                if interface.stop_program:
+                if interface.stop_program or interface.paused:
                     break
 
-                # if not first_file:
-                #     if not interface.erase and not interface.next_drawing:
-                #         wait_for_erase()
-                #     else:
-                #         interface.next_drawing = False
-                #         interface.erase = False
+                if not start_first_file:
+                    erase_out_to_in()
 
-                #     erase_out_to_in()
+                    if interface.stop_program:
+                        break
 
-                #     if interface.stop_program:
-                #         break
+                    start_first_file = True
 
                 print("Running: {}".format(f))
-                # if not interface.displaying_options:
-                #     lcd_display.lcd_clear()
-                #     lcd_display.lcd_display_string("Reading file....", 2)
-                #     lcd_display.lcd_display_string(f, 3)
-
-                # interface.currently_displayed.clear()
-                # interface.currently_displayed.extend((("Reading file....", 2, 0), (f, 3, 0)))
 
                 track = read_track(f, Dir="/home/pi/code/sand_table/")
 
-                # if not interface.displaying_options:
-                #     lcd_display.lcd_clear()
-
-                prog_disp_interrupted = False
-
-                # if not interface.displaying_options:
-                #     lcd_display.lcd_display_string("Currently running:", 1)
-                #     lcd_display.lcd_display_string(f, 2)
-                #     lcd_display.lcd_display_string("Progress: ", 4)
-                # # else:
-                # #     prog_disp_interrupted = True
-
-                # interface.currently_displayed.clear()
-                # interface.currently_displayed.extend((("Currently running:", 1, 0), (f, 2, 0), ("Progress: ", 4, 0)))
-
-                first_step = True
-
                 for i, step in enumerate(track):
                     print(step)
-
-                    # if interface.displaying_options:
-                    #     prog_disp_interrupted = True
-
-                    # if prog_disp_interrupted and not interface.displaying_options:
-                    #     lcd_display.lcd_display_string("Currently running:", 1)
-                    #     lcd_display.lcd_display_string(f, 2)
-                    #     lcd_display.lcd_display_string("Progress: ", 4)
-                    #     prog_disp_interrupted = False
-
-                    # if not interface.displaying_options:
-                    #     lcd_display.lcd_display_string("          ", 4, 10)
-                    #     lcd_display.lcd_display_string("{}/{}".format(i+1, track.shape[0]), 4, 10)
-
-                    # if first_step:
-                    #     interface.currently_displayed.extend((("          ", 4, 10), ("{}/{}".format(i+1, track.shape[0]), 4, 10)))
-                    # else:
-                    #     interface.currently_displayed[3] = ("          ", 4, 10)
-                    #     interface.currently_displayed[4] = ("{}/{}".format(i+1, track.shape[0]), 4, 10)
+                    # lcd_display.lcd_display_string(
+                    #     "{}/{}".format(i+1, track.shape[0]), 4, 10)
 
                     # Create motor threads
                     MRot = threading.Thread(target=run_MRot, args=(step[0], step[2],))
@@ -540,18 +338,13 @@ def main():
                     MRot.join()
                     MLin.join()
 
-                    if interface.collision_detected:
-                        interface.limit_pressed = False
-                        break
-
                     if interface.stop_program or interface.next_drawing:
                         break
+                    if interface.paused:
+                        while interface.paused:
+                            sleep(.1)
 
                     print("Motors done!")
-                    first_step = False
-
-                first_file = False
-                # interface.currently_displayed.clear()
 
         if interface.stop_program:
             stop_program(shutdown=True)
